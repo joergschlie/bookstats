@@ -4,7 +4,7 @@ Springer Book & Chapter Access Timeseries Scraper
 -------------------------------------------------
 Captures daily access counts for:
 - The entire book: https://link.springer.com/book/10.1007/978-3-658-53428-8
-- All individual chapters
+- All individual chapters across all Table of Contents pages
 
 Outputs:
 - book_stats.csv (UTF-8 with BOM for Excel compatibility)
@@ -95,31 +95,49 @@ def parse_access_count(html: str) -> int:
     raise ValueError("Could not extract access count from page HTML.")
 
 
-def discover_chapters(book_html: str) -> list[dict]:
+def discover_all_chapters() -> list[dict]:
     """
-    Extract chapter URLs and titles from the main book page.
-    Sorts chapters numerically according to their DOI suffix (e.g. _1, _2, ..., _16).
+    Extract chapter URLs and titles from all pages of the book Table of Contents.
+    Paginates (?page=1#toc, ?page=2#toc, ...) until no further chapters are found.
+    Sorts chapters numerically according to their DOI suffix (e.g. _1, _2, ..., _19).
     """
-    soup = BeautifulSoup(book_html, "html.parser")
     pattern = re.compile(rf"/chapter/{re.escape(BOOK_DOI)}_(\d+)")
-
     seen = set()
     chapters = []
+    page = 1
 
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        m = pattern.search(href)
-        if m:
-            clean_href = m.group(0)
-            if clean_href not in seen:
-                seen.add(clean_href)
-                chapter_num = int(m.group(1))
-                title = a.get_text(strip=True)
-                chapters.append({
-                    "num": chapter_num,
-                    "url": f"{BASE_URL}{clean_href}",
-                    "title": title
-                })
+    while True:
+        url = f"{BOOK_URL}?page={page}#toc"
+        print(f"Discovering chapters from TOC page {page}...")
+        try:
+            html = fetch_html(url)
+        except Exception as e:
+            print(f"Failed to fetch TOC page {page}: {e}")
+            break
+
+        soup = BeautifulSoup(html, "html.parser")
+        new_on_page = 0
+
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            m = pattern.search(href)
+            if m:
+                clean_href = m.group(0)
+                if clean_href not in seen:
+                    seen.add(clean_href)
+                    chapter_num = int(m.group(1))
+                    title = a.get_text(strip=True)
+                    chapters.append({
+                        "num": chapter_num,
+                        "url": f"{BASE_URL}{clean_href}",
+                        "title": title
+                    })
+                    new_on_page += 1
+
+        print(f"  Found {new_on_page} new chapters on page {page}.")
+        if new_on_page == 0:
+            break
+        page += 1
 
     # Sort numerically by chapter number
     chapters.sort(key=lambda c: c["num"])
@@ -131,15 +149,15 @@ def scrape_all() -> dict:
     today = datetime.now().strftime("%Y-%m-%d")
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting scrape for {today}...")
 
-    # 1. Scrape book page
-    print(f"Fetching book page: {BOOK_URL}")
+    # 1. Scrape book page for total book accesses
+    print(f"Fetching main book page: {BOOK_URL}")
     book_html = fetch_html(BOOK_URL)
     book_accesses = parse_access_count(book_html)
     print(f"  Book Accesses: {book_accesses}")
 
-    # 2. Discover chapters
-    chapters = discover_chapters(book_html)
-    print(f"Discovered {len(chapters)} chapters.")
+    # 2. Discover all chapters across all TOC pages
+    chapters = discover_all_chapters()
+    print(f"Discovered {len(chapters)} chapters in total.")
 
     row_data = {
         "Datum": today,
@@ -148,7 +166,7 @@ def scrape_all() -> dict:
 
     # 3. Scrape each chapter
     for ch in chapters:
-        print(f"Fetching Chapter {ch['num']}: {ch['title'][:40]}...")
+        print(f"Fetching Chapter {ch['num']}: {ch['title'][:50]}...")
         try:
             ch_html = fetch_html(ch["url"])
             ch_accesses = parse_access_count(ch_html)
@@ -175,7 +193,6 @@ def update_timeseries_files(new_row: dict):
     if os.path.exists(CSV_FILE):
         try:
             df = pd.read_csv(CSV_FILE, encoding="utf-8-sig")
-            # Ensure 'Datum' is string
             df["Datum"] = df["Datum"].astype(str)
         except Exception as e:
             print(f"Warning: Could not read existing {CSV_FILE}: {e}. Creating new DataFrame.")
@@ -188,9 +205,14 @@ def update_timeseries_files(new_row: dict):
     if df.empty:
         df = new_df_row
     else:
+        # Ensure all columns from new_row exist in df
+        for col in new_row.keys():
+            if col not in df.columns:
+                df[col] = None
+
         # Check if today already exists
         if today in df["Datum"].values:
-            print(f"Entry for {today} already exists. Updating existing row...")
+            print(f"Entry for {today} already exists. Updating row with all chapters...")
             idx = df[df["Datum"] == today].index[0]
             for col, val in new_row.items():
                 df.at[idx, col] = val
@@ -198,13 +220,16 @@ def update_timeseries_files(new_row: dict):
             print(f"Appending new row for {today}...")
             df = pd.concat([df, new_df_row], ignore_index=True)
 
-    # Reorder columns: Datum, Buch, followed by chapters in original order
-    cols = ["Datum", "Buch"] + [c for c in df.columns if c not in ["Datum", "Buch"]]
-    df = df[cols]
+    # Reorder columns: Datum, Buch, followed by chapters in exact order
+    ordered_cols = ["Datum", "Buch"] + [c for c in new_row.keys() if c not in ["Datum", "Buch"]]
+    for c in df.columns:
+        if c not in ordered_cols:
+            ordered_cols.append(c)
+    df = df[ordered_cols]
 
     # Save to CSV (utf-8-sig for perfect Excel compatibility with Umlauts)
     df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
-    print(f"Saved: {CSV_FILE} ({len(df)} row(s))")
+    print(f"Saved: {CSV_FILE} ({len(df)} row(s), {len(df.columns)} columns)")
 
     # Save to Excel with formatted styling
     with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl") as writer:
@@ -219,7 +244,7 @@ def update_timeseries_files(new_row: dict):
             col_letter = worksheet.cell(row=1, column=col_idx).column_letter
             worksheet.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 60)
 
-    print(f"Saved: {EXCEL_FILE} ({len(df)} row(s))")
+    print(f"Saved: {EXCEL_FILE} ({len(df)} row(s), {len(df.columns)} columns)")
 
 
 def main():
