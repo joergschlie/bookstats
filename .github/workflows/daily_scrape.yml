@@ -1,0 +1,44 @@
+name: Daily Book Stats Scraper
+
+on:
+  schedule:
+    # Runs everyday at 04:00 UTC (05:00 CET / 06:00 CEST)
+    - cron: '0 4 * * *'
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Book Scraper
+        run: python book_scraper.py
+
+      - name: Commit and push updated stats
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add book_stats.csv book_stats.xlsx
+          # Only commit if changes were detected
+          if ! git diff --staged --quiet; then
+            git commit -m "Update access statistics: $(date +'%Y-%m-%d')"
+            git push
+          else
+            echo "No changes in metrics today."
+          fi
