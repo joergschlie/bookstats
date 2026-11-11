@@ -2,10 +2,14 @@ name: Daily Book Stats Scraper
 
 on:
   schedule:
-    # Runs everyday at 04:25 UTC (05:25 CET / 06:25 CEST)
-    # Using minute 25 avoids GitHub's top-of-the-hour scheduler bottlenecks
-    - cron: '25 4 * * *'
-  workflow_dispatch: # Allows manual trigger from the Actions tab
+    # Multiple cron slots during the morning (UTC).
+    # GitHub's scheduler is best-effort and can silently drop single cron runs.
+    # Having multiple schedule checkpoints ensures at least one triggers daily.
+    # Since our script safely updates today's row, multiple runs per day are idempotent.
+    - cron: '25 4 * * *'   # 05:25 CET / 06:25 CEST
+    - cron: '25 6 * * *'   # 07:25 CET / 08:25 CEST
+    - cron: '25 8 * * *'   # 09:25 CET / 10:25 CEST
+  workflow_dispatch: # Allows manual trigger from GitHub UI / API
 
 jobs:
   scrape:
