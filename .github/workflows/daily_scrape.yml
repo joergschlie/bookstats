@@ -2,11 +2,14 @@ name: Daily Book Stats Scraper
 
 on:
   schedule:
-    # Springer updates their metrics database daily between 08:30 and 09:00 UTC (09:30-10:00 CET).
-    # Scraping at 10:15 UTC (11:15 CET) guarantees Springer's daily batch update has fully completed.
-    # A second fallback at 13:15 UTC ensures coverage even if GitHub queues the morning run.
-    - cron: '15 10 * * *'   # 11:15 CET / 12:15 CEST (Primary run after Springer's daily update)
-    - cron: '15 13 * * *'   # 14:15 CET / 15:15 CEST (Fallback run)
+    # Nighttime execution window between 02:00 and 06:00 CET (01:00 - 05:00 UTC).
+    # Why nighttime works best:
+    # 1. Springer's daily rolling batch updates from the previous day have 100% completed and settled.
+    # 2. GitHub Actions runner congestion is much lower at night (UTC 01:00-05:00) than during peak daytime.
+    # 3. 3 staggered checkpoints ensure that if GitHub delays one slot, the next catches it before morning.
+    - cron: '20 1 * * *'   # 02:20 CET / 03:20 CEST (Primary night run)
+    - cron: '20 3 * * *'   # 04:20 CET / 05:20 CEST (Fallback 1)
+    - cron: '20 4 * * *'   # 05:20 CET / 06:20 CEST (Fallback 2)
   workflow_dispatch: # Allows manual trigger from GitHub UI / API
 
 jobs:
