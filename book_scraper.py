@@ -59,21 +59,49 @@ def fetch_html(url: str, max_retries: int = 3, retry_delay: float = 2.0) -> str:
                 raise
 
 
+def _parse_metric_number(raw_str: str) -> int | None:
+    """
+    Parse a Springer metric number string such as '7342', '9,915', '10k',
+    '10.5k', or '1.2m' into an integer.
+    """
+    s = raw_str.strip().lower().replace(" ", "")
+    multiplier = 1
+    if s.endswith("k"):
+        multiplier = 1000
+        s = s[:-1].strip()
+    elif s.endswith("m"):
+        multiplier = 1000000
+        s = s[:-1].strip()
+
+    if multiplier > 1:
+        s = s.replace(",", ".")
+        try:
+            return int(round(float(s) * multiplier))
+        except ValueError:
+            return None
+    else:
+        clean = s.replace(",", "").replace(".", "")
+        if clean.isdigit():
+            return int(clean)
+        return None
+
+
 def parse_access_count(html: str) -> int:
     """
     Extract the access count from HTML.
-    Looks for the metric element containing 'Accesses'.
+    Looks for the metric element containing 'Accesses' (supports '7342' as well as '10k', '1.2m').
     """
     soup = BeautifulSoup(html, "html.parser")
+    pattern = r"([\d,.\s]+[kKmM]?)\s*Accesses"
 
     # Strategy 1: Look for metrics bar count element
     for el in soup.find_all(attrs={"class": re.compile(r"metrics-bar__count", re.I)}):
         text = el.get_text(" ", strip=True)
-        m = re.search(r"([\d,.\s]+)\s*Accesses", text, re.I)
+        m = re.search(pattern, text, re.I)
         if m:
-            clean = m.group(1).replace(",", "").replace(".", "").replace(" ", "").strip()
-            if clean.isdigit():
-                return int(clean)
+            val = _parse_metric_number(m.group(1))
+            if val is not None:
+                return val
 
     # Strategy 2: Look for 'Accesses' label and find parent count
     label = soup.find(lambda tag: tag.name in ["span", "p"] and "accesses" in tag.get_text().lower())
@@ -81,18 +109,18 @@ def parse_access_count(html: str) -> int:
         parent = label.find_parent()
         if parent:
             text = parent.get_text(" ", strip=True)
-            m = re.search(r"([\d,.\s]+)\s*Accesses", text, re.I)
+            m = re.search(pattern, text, re.I)
             if m:
-                clean = m.group(1).replace(",", "").replace(".", "").replace(" ", "").strip()
-                if clean.isdigit():
-                    return int(clean)
+                val = _parse_metric_number(m.group(1))
+                if val is not None:
+                    return val
 
     # Strategy 3: Direct regex fallback
-    m = re.search(r">\s*([\d,.\s]+)\s*<span[^>]*class=\"[^\"]*metrics-bar__label\"[^>]*>\s*Accesses\s*</span>", html, re.I)
+    m = re.search(r">\s*([\d,.\s]+[kKmM]?)\s*<span[^>]*class=\"[^\"]*metrics-bar__label\"[^>]*>\s*Accesses\s*</span>", html, re.I)
     if m:
-        clean = m.group(1).replace(",", "").replace(".", "").replace(" ", "").strip()
-        if clean.isdigit():
-            return int(clean)
+        val = _parse_metric_number(m.group(1))
+        if val is not None:
+            return val
 
     raise ValueError("Could not extract access count from page HTML.")
 
